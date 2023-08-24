@@ -16,9 +16,15 @@ contract GameDeposit is ERC721URIStorage, AccessControl, ERC721Holder {
     bytes32 public constant GAME_ADMIN = keccak256("GAME_ADMIN");
     uint256 public constant DEPOSIT_AMOUNT = 0.01 ether;
     uint256 public currentTokenId = 0;
+    bool public isGameOver = false;
 
+    event GameStarted(address indexed player, uint256 tokenId);
+    event ClueAdvanced(address indexed player, uint256 newLevel);
+    event GameOver(address winner);
+    
     mapping(address => uint256) public playerProgress; // Track each player's progress
     mapping(address => bool) public hasDeposited;
+    mapping(uint256 => bytes32) public clueHashes; // Maps clue level to its hash
 
     string public baseURI; // Base URI for metadata
 
@@ -43,19 +49,36 @@ function supportsInterface(bytes4 interfaceId) public view virtual override(Acce
         currentTokenId++;
         _mint(msg.sender, currentTokenId);
         _setTokenURI(currentTokenId, tokenURI(currentTokenId));
-    }
+        emit GameStarted(msg.sender, currentTokenId);
+}
 
 function tokenURI(uint256 tokenId) public view override returns (string memory) {
     require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+    
+    if (isGameOver) {
+        return string(abi.encodePacked(baseURI, "/game_over"));
+    }
+    
     return string(abi.encodePacked(baseURI, "/", uint2str(tokenId)));
 }
 
 
-    function advanceToNextClue() external {
-        // Logic to verify if the player has solved the current clue
-        // If solved, advance to the next clue
-        playerProgress[msg.sender]++;
-    }
+
+    function setClueHash(uint256 level, string memory code) external {
+        require(hasRole(GAME_ADMIN, _msgSender()), "Not authorized");
+        clueHashes[level] = keccak256(abi.encodePacked(code));
+}
+
+    function advanceToNextClue(string memory codeAttempt, bytes32 submittedHash) external {
+    bytes32 uniqueNFTData = bytes32(currentTokenId); // or any other unique attribute
+    bytes32 combinedHash = keccak256(abi.encodePacked(codeAttempt, uniqueNFTData));
+
+    require(combinedHash == submittedHash, "Hash mismatch");
+    require(combinedHash == clueHashes[playerProgress[msg.sender]], "Incorrect code");
+
+    playerProgress[msg.sender]++;
+    emit ClueAdvanced(msg.sender, playerProgress[msg.sender]);
+}
 
    function claimPrize(uint256 tokenId) external {
         require(ownerOf(tokenId) == msg.sender, "Not the token owner");
@@ -72,6 +95,8 @@ function tokenURI(uint256 tokenId) public view override returns (string memory) 
         ownerAddress.sendValue(ownerAmount); // Use ownerAddress here
 
         _burn(tokenId); // Burn the NFT to claim the prize
+        isGameOver = true;
+        emit GameOver(msg.sender);
     }
 
     function withdrawFunds(address payable recipient) external {
